@@ -192,6 +192,75 @@ async def list_running_models():
     # Return empty list as we don't actually run models locally
     return {"models": []}
 
+# --- OpenAI-compatible /v1/models endpoints ---
+@app.get("/v1/models")
+async def openai_list_models():
+    """List available models dynamically from Qwen API."""
+    await ensure_authenticated()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            qwen_url = f"{get_base_url()}/models"
+            headers = {
+                "Authorization": f"Bearer {credentials['access_token']}"
+            }
+            response = await client.get(qwen_url, headers=headers)
+            if response.status_code == 200:
+                return response.json()
+    except Exception as e:
+        print(f"Failed to fetch models from Qwen: {e}")
+
+    # Fallback to hardcoded list if upstream fails
+    current_time = int(time.time())
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "qwen3-coder-plus",
+                "object": "model",
+                "created": current_time,
+                "owned_by": "qwen",
+                "permission": [],
+                "root": "qwen3-coder-plus",
+                "parent": None,
+            },
+            {
+                "id": "vision-model",
+                "object": "model",
+                "created": current_time,
+                "owned_by": "qwen",
+                "permission": [],
+                "root": "vision-model",
+                "parent": None,
+            },
+        ],
+    }
+
+@app.get("/v1/models/{model_id}")
+async def openai_retrieve_model(model_id: str):
+    """Retrieve a specific model in OpenAI API format dynamically."""
+    await ensure_authenticated()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            qwen_url = f"{get_base_url()}/models/{model_id}"
+            headers = {
+                "Authorization": f"Bearer {credentials['access_token']}"
+            }
+            response = await client.get(qwen_url, headers=headers)
+            if response.status_code == 200:
+                return response.json()
+    except Exception as e:
+        pass
+        
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": "qwen",
+        "permission": [],
+        "root": model_id,
+        "parent": None,
+    }
+
 @app.on_event("startup")
 async def startup_event():
     print("=" * 50)
@@ -588,6 +657,17 @@ async def chat_completions(request: Request):
         raise RuntimeError("Model name is required")
     if not messages or not isinstance(messages, list):
         raise RuntimeError("Messages field is required and must be an array")
+
+    # Verify that the model is supported
+    supported_models = ["qwen3-coder-plus", "vision-model"]
+    if model not in supported_models:
+        raise RuntimeError(f"Unsupported model: {model}. Supported models: {', '.join(supported_models)}")
+
+    # Sanitize body for DashScope compatibility
+    # DashScope is strict and will reject unknown OpenAI parameters used by some clients
+    qwen_body = dict(body)
+    for key in ["stream_options", "user", "metadata"]:
+        qwen_body.pop(key, None)
 
     # Verify that the model is supported
     supported_models = ["qwen3-coder-plus", "vision-model"]
